@@ -80,6 +80,163 @@ def fetch_alpha_vantage_data(ticker):
         return None
 
 
+def get_stock_data(ticker, data_source, start_date=None, end_date=None):
+    """
+    Get stock price data from the specified data source
+
+    Parameters:
+    -----------
+    ticker : str
+        Stock ticker symbol
+    data_source : str
+        'yahoo' or 'alpha_vantage'
+    start_date : str, optional
+        Start date in YYYY-MM-DD format
+    end_date : str, optional
+        End date in YYYY-MM-DD format
+
+    Returns:
+    --------
+    DataFrame with stock price data, with 'price' column for closing prices
+    """
+    try:
+        if end_date is None:
+            end_date = datetime.now()
+        else:
+            if isinstance(end_date, str):
+                end_date = datetime.strptime(end_date, '%Y-%m-%d')
+
+        if start_date is None:
+            start_date = end_date - timedelta(days=365)  # Default to 1 year
+        else:
+            if isinstance(start_date, str):
+                start_date = datetime.strptime(start_date, '%Y-%m-%d')
+
+        if data_source == 'yahoo':
+            # Use yfinance
+            data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+            if data is not None and not data.empty:
+                # Add price column for consistency (but keep Close for compatibility)
+                data['price'] = data['Close']
+                return data
+            else:
+                return None
+        else:
+            # Use Alpha Vantage
+            data = fetch_alpha_vantage_data(ticker)
+            if data is not None and not data.empty:
+                # Filter by date
+                data = data.loc[start_date:end_date].copy()
+                # Add price column for consistency
+                data['price'] = data['Close']
+                return data
+            else:
+                return None
+    except Exception as e:
+        st.error(f"Error fetching data for {ticker}: {str(e)}")
+        return None
+
+def get_stock_sector(ticker):
+    """
+    Get the sector for a given stock ticker.
+
+    Parameters:
+    -----------
+    ticker : str
+        The stock ticker symbol
+
+    Returns:
+    --------
+    str or None
+        The sector name, or None if not found
+    """
+    # This is a simplified implementation using a dictionary of common stocks
+    # In a production app, you might want to use a more comprehensive data source
+    sectors = {
+        'AAPL': 'Technology',
+        'MSFT': 'Technology',
+        'AMZN': 'Consumer Cyclical',
+        'GOOGL': 'Communication Services',
+        'GOOG': 'Communication Services',
+        'META': 'Communication Services',
+        'TSLA': 'Consumer Cyclical',
+        'NVDA': 'Technology',
+        'BRK-B': 'Financial Services',
+        'LLY': 'Healthcare',
+        'V': 'Financial Services',
+        'UNH': 'Healthcare',
+        'JPM': 'Financial Services',
+        'JNJ': 'Healthcare',
+        'XOM': 'Energy',
+        'PG': 'Consumer Defensive',
+        'MA': 'Financial Services',
+        'HD': 'Consumer Cyclical',
+        'AVGO': 'Technology',
+        'CVX': 'Energy',
+        'MRK': 'Healthcare',
+        'COST': 'Consumer Defensive',
+        'ABBV': 'Healthcare',
+        'PEP': 'Consumer Defensive',
+        'KO': 'Consumer Defensive',
+        'WMT': 'Consumer Defensive',
+        'BAC': 'Financial Services',
+        'MCD': 'Consumer Cyclical',
+        'TMO': 'Healthcare',
+        'CSCO': 'Technology',
+        'ACN': 'Technology',
+        'ADBE': 'Technology',
+        'ABT': 'Healthcare',
+        'DIS': 'Communication Services',
+        'TXN': 'Technology',
+        'CRM': 'Technology',
+        'NFLX': 'Communication Services',
+        'VZ': 'Communication Services',
+        'INTC': 'Technology',
+        'QCOM': 'Technology',
+        'IBM': 'Technology',
+        'AMD': 'Technology',
+        'AMGN': 'Healthcare',
+        'PYPL': 'Financial Services',
+        'SBUX': 'Consumer Cyclical',
+        'PM': 'Consumer Defensive',
+        'T': 'Communication Services',
+        'BA': 'Industrials',
+        'GE': 'Industrials',
+        'CAT': 'Industrials',
+    }
+
+    # Try to find the sector for the given ticker
+    if ticker in sectors:
+        return sectors[ticker]
+
+    # If we don't have sector data for this stock, try to get it from Yahoo Finance
+    try:
+        stock_info = yf.Ticker(ticker).info
+        if 'sector' in stock_info and stock_info['sector']:
+            return stock_info['sector']
+    except:
+        pass
+
+    return None  # Return None if sector not found
+def map_sector_to_etf(sector):
+    """
+    Map a sector to its corresponding ETF.
+    """
+    sector_etfs = {
+        'Technology': 'XLK',
+        'Healthcare': 'XLV',
+        'Financial Services': 'XLF',
+        'Consumer Cyclical': 'XLY',
+        'Consumer Defensive': 'XLP',
+        'Communication Services': 'XLC',
+        'Energy': 'XLE',
+        'Industrials': 'XLI',
+        'Basic Materials': 'XLB',
+        'Utilities': 'XLU',
+        'Real Estate': 'XLRE'
+    }
+
+    return sector_etfs.get(sector, None)
 # Recommendation system
 def generate_recommendation(ticker, data_source='yahoo'):
     try:
@@ -482,7 +639,7 @@ def generate_recommendation(ticker, data_source='yahoo'):
         }
 
         # Return detailed results
-        return {
+        recommendation_dict = {
             "ticker": ticker,
             "company": company_name,
             "price": current_price,
@@ -492,15 +649,286 @@ def generate_recommendation(ticker, data_source='yahoo'):
             "signals": signals,
             "indicators": clean_indicators,
             "has_sentiment": has_sentiment,
-            "data_source": data_source
+            "data_source": data_source,
+            "recent_performance": 0.0,
+            "spy_performance": 0.0,
+            "relative_performance": 0.0
         }
+
+        # Add relative performance to recommendation
+        try:
+            # Get last 30 days of data
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=30)
+
+            # Get stock data using our improved function
+            stock_data = get_stock_data(ticker, data_source,
+                                        start_date=start_date.strftime('%Y-%m-%d'))
+
+            # Get benchmark data
+            benchmark_data = get_stock_data("SPY", data_source,
+                                            start_date=start_date.strftime('%Y-%m-%d'))
+
+            if (stock_data is not None and benchmark_data is not None and
+                    len(stock_data) > 5 and len(benchmark_data) > 5 and
+                    'price' in stock_data.columns and 'price' in benchmark_data.columns):
+
+                # Calculate normalized performance
+                stock_perf = (stock_data['price'].iloc[-1] / stock_data['price'].iloc[0]) - 1
+                benchmark_perf = (benchmark_data['price'].iloc[-1] / benchmark_data['price'].iloc[0]) - 1
+
+                # Calculate relative performance
+                relative_perf = stock_perf - benchmark_perf
+
+                # Add to recommendation dictionary
+                recommendation_dict["recent_performance"] = float(stock_perf * 100)
+                recommendation_dict["spy_performance"] = float(benchmark_perf * 100)
+                recommendation_dict["relative_performance"] = float(relative_perf * 100)
+            else:
+                recommendation_dict["recent_performance"] = 0.0
+                recommendation_dict["spy_performance"] = 0.0
+                recommendation_dict["relative_performance"] = 0.0
+
+        except Exception as e:
+            recommendation_dict["recent_performance"] = 0.0
+            recommendation_dict["spy_performance"] = 0.0
+            recommendation_dict["relative_performance"] = 0.0
+
+        return recommendation_dict
 
     except Exception as e:
         traceback.print_exc()
         return {"recommendation": "Error", "reason": f"Error generating recommendation: {str(e)}", "score": 0}
 
 
+def plot_relative_performance(ticker, data_source, lookback_periods=[30, 90, 365], benchmark="SPY"):
+    """
+    Plot relative performance of a stock versus SPY benchmark over multiple time periods.
+
+    Parameters:
+    -----------
+    ticker : str
+        The stock ticker symbol
+    data_source : str
+        The data source to use ('yahoo', 'alpha_vantage', etc.)
+    lookback_periods : list
+        List of days to look back for each chart
+    benchmark : str
+        Benchmark ticker symbol (default: SPY)
+    """
+
+    # Get the current date
+    end_date = datetime.now()
+
+    # Create tabs for different time periods
+    period_tabs = st.tabs([f"{period} Days" for period in lookback_periods])
+
+    for i, period in enumerate(lookback_periods):
+        with period_tabs[i]:
+            try:
+                # Calculate start date
+                start_date = end_date - timedelta(days=period)
+
+                # Get stock data
+                stock_data = get_stock_data(ticker, data_source,
+                                            start_date=start_date.strftime('%Y-%m-%d'))
+
+                # Get benchmark data
+                benchmark_data = get_stock_data(benchmark, data_source,
+                                                start_date=start_date.strftime('%Y-%m-%d'))
+
+                if stock_data is None or benchmark_data is None or len(stock_data) < 5 or len(benchmark_data) < 5:
+                    st.warning(f"Insufficient data for {ticker} or {benchmark} in the {period}-day period")
+                    continue
+
+                # Extract price data (handling different possible formats)
+                # For stock data
+                if 'price' in stock_data.columns:
+                    if isinstance(stock_data['price'], pd.DataFrame):
+                        stock_prices = stock_data['price'].iloc[:, 0]
+                    elif isinstance(stock_data['price'], pd.Series):
+                        stock_prices = stock_data['price']
+                    else:
+                        # Try to convert ndarray to series
+                        stock_prices = pd.Series(stock_data['price'].flatten(), index=stock_data.index)
+                elif 'Close' in stock_data.columns:
+                    stock_prices = stock_data['Close']
+                else:
+                    st.warning(f"No price data found for {ticker}")
+                    continue
+
+                # For benchmark data
+                if 'price' in benchmark_data.columns:
+                    if isinstance(benchmark_data['price'], pd.DataFrame):
+                        benchmark_prices = benchmark_data['price'].iloc[:, 0]
+                    elif isinstance(benchmark_data['price'], pd.Series):
+                        benchmark_prices = benchmark_data['price']
+                    else:
+                        # Try to convert ndarray to series
+                        benchmark_prices = pd.Series(benchmark_data['price'].flatten(), index=benchmark_data.index)
+                elif 'Close' in benchmark_data.columns:
+                    benchmark_prices = benchmark_data['Close']
+                else:
+                    st.warning(f"No price data found for {benchmark}")
+                    continue
+
+                # Normalize both series to start at 100
+                first_stock_price = stock_prices.iloc[0] if hasattr(stock_prices, 'iloc') else stock_prices[0]
+                first_benchmark_price = benchmark_prices.iloc[0] if hasattr(benchmark_prices, 'iloc') else \
+                benchmark_prices[0]
+
+                stock_normalized = 100 * (stock_prices / first_stock_price)
+                benchmark_normalized = 100 * (benchmark_prices / first_benchmark_price)
+
+                # Calculate relative performance (percentage)
+                last_stock_norm = stock_normalized.iloc[-1] if hasattr(stock_normalized, 'iloc') else stock_normalized[
+                    -1]
+                last_benchmark_norm = benchmark_normalized.iloc[-1] if hasattr(benchmark_normalized, 'iloc') else \
+                benchmark_normalized[-1]
+
+                relative_perf = ((last_stock_norm / 100) - (last_benchmark_norm / 100)) * 100
+
+                # Create DataFrame for plotting
+                # Ensure all data is 1D series
+                dates = stock_data.index
+
+                # Convert ndarrays to flat arrays if needed
+                if hasattr(stock_normalized, 'values'):
+                    stock_norm_values = stock_normalized.values
+                    if len(stock_norm_values.shape) > 1:
+                        stock_norm_values = stock_norm_values.flatten()
+                else:
+                    stock_norm_values = stock_normalized
+
+                if hasattr(benchmark_normalized, 'values'):
+                    benchmark_norm_values = benchmark_normalized.values
+                    if len(benchmark_norm_values.shape) > 1:
+                        benchmark_norm_values = benchmark_norm_values.flatten()
+                else:
+                    benchmark_norm_values = benchmark_normalized
+
+                # Create dataframe with flattened arrays
+                plot_df = pd.DataFrame({
+                    'Date': dates,
+                    ticker: stock_norm_values,
+                    benchmark: benchmark_norm_values
+                })
+
+                # Create a Plotly figure
+                fig = px.line(plot_df, x='Date', y=[ticker, benchmark],
+                              title=f'{ticker} vs {benchmark} ({period} Day Performance)')
+
+                # Add shading based on which one performed better
+                if last_stock_norm > last_benchmark_norm:
+                    color = 'rgba(0, 255, 0, 0.1)'  # Green
+                else:
+                    color = 'rgba(255, 0, 0, 0.1)'  # Red
+
+                fig.add_shape(
+                    type="rect",
+                    xref="paper", yref="paper",
+                    x0=0, y0=0,
+                    x1=1, y1=1,
+                    fillcolor=color,
+                    opacity=0.3,
+                    layer="below",
+                    line_width=0,
+                )
+
+                # Add annotations for final values
+                fig.add_annotation(
+                    x=plot_df['Date'].iloc[-1],
+                    y=plot_df[ticker].iloc[-1],
+                    text=f"{plot_df[ticker].iloc[-1]:.1f}",
+                    showarrow=True,
+                    arrowhead=1,
+                )
+
+                fig.add_annotation(
+                    x=plot_df['Date'].iloc[-1],
+                    y=plot_df[benchmark].iloc[-1],
+                    text=f"{plot_df[benchmark].iloc[-1]:.1f}",
+                    showarrow=True,
+                    arrowhead=1,
+                )
+
+                # Add relative performance annotation
+                fig.add_annotation(
+                    x=0.5,
+                    y=1.05,
+                    xref="paper",
+                    yref="paper",
+                    text=f"Relative Performance: {'+' if relative_perf > 0 else ''}{relative_perf:.2f}%",
+                    showarrow=False,
+                    font=dict(
+                        size=14,
+                        color="green" if relative_perf > 0 else "red"
+                    )
+                )
+
+                # Customize layout
+                fig.update_layout(
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1
+                    ),
+                    xaxis_title="",
+                    yaxis_title="Performance (Normalized to 100)",
+                    hovermode="x unified"
+                )
+
+                # Display the chart
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Show key statistics
+                col1, col2, col3 = st.columns(3)
+
+                # Calculate returns
+                stock_return = ((last_stock_norm / 100) - 1) * 100
+                benchmark_return = ((last_benchmark_norm / 100) - 1) * 100
+
+                # Show statistics
+                col1.metric(f"{ticker} Return", f"{stock_return:.2f}%",
+                            f"{stock_return - benchmark_return:.2f}%" if stock_return != benchmark_return else None)
+
+                col2.metric(f"{benchmark} Return", f"{benchmark_return:.2f}%")
+
+                col3.metric("Relative Performance", f"{relative_perf:.2f}%")
+
+                # Calculate correlation
+                try:
+                    correlation = pd.Series(stock_prices).pct_change().corr(pd.Series(benchmark_prices).pct_change())
+                    st.info(f"Price Change Correlation: {correlation:.2f}")
+                except Exception as e:
+                    st.warning(f"Could not calculate correlation: {str(e)}")
+
+            except Exception as e:
+                st.error(f"Error creating performance chart for {period} days: {str(e)}")
+                import traceback
+                st.error(traceback.format_exc())
+
 def stock_analysis(ticker, data_source='yahoo'):
+    # Get recommendation
+    recommendation = generate_recommendation(ticker, data_source)
+
+    # Display performance metrics if available
+    if "relative_performance" in recommendation:
+        st.subheader("Recent Performance (30 Days)")
+        perf_col1, perf_col2, perf_col3 = st.columns(3)
+
+        # Use values from recommendation
+        recent_perf = recommendation.get('recent_performance', 0.0)
+        spy_perf = recommendation.get('spy_performance', 0.0)
+        relative_perf = recommendation.get('relative_performance', 0.0)
+
+        perf_col1.metric(f"{ticker} Return", f"{recent_perf:.2f}%")
+        perf_col2.metric(f"SPY Return", f"{spy_perf:.2f}%")
+        perf_col3.metric("Relative Performance", f"{relative_perf:.2f}%",
+                        f"{relative_perf:.2f}%" if relative_perf != 0 else None)
+
     st.subheader(f"Analysis for {ticker}")
 
     try:
@@ -543,7 +971,16 @@ def stock_analysis(ticker, data_source='yahoo'):
             # Show data source
             source_name = "Yahoo Finance" if recommendation.get("data_source") == "yahoo" else "Alpha Vantage"
             st.write(f"Data source: **{source_name}**")
+        # In the section where you display recommendations
+        if "relative_performance" in recommendation:
+            st.subheader("Recent Performance (30 Days)")
+            col1, col2, col3 = st.columns(3)
 
+            col1.metric(f"{ticker} Return", f"{recommendation['recent_performance']:.2f}%")
+            col2.metric(f"SPY Return", f"{recommendation['spy_performance']:.2f}%")
+            col3.metric("Relative Performance", f"{recommendation['relative_performance']:.2f}%",
+                        f"{recommendation['relative_performance']:.2f}%" if recommendation[
+                                                                                'relative_performance'] != 0 else None)
         # Display signal details
         if "signals" in recommendation and recommendation["signals"]:
             # Find sentiment signals (those that contain specific keywords)
@@ -692,8 +1129,22 @@ def stock_analysis(ticker, data_source='yahoo'):
         st.error(f"Error analyzing {ticker}: {e}")
         st.code(traceback.format_exc())
 
-# Backtesting function with ML
-def backtest_strategy(ticker, data_source, lookback_days=365):
+    # Add comparison chart in a new section
+    st.subheader(f"Relative Performance: {ticker} vs S&P 500")
+
+    # Create the chart
+    plot_relative_performance(ticker, data_source, lookback_periods=[30, 90, 180, 365], benchmark="SPY")
+
+    # Additional analysis for comparing stock with sector ETF
+    sector = get_stock_sector(ticker)  # You would need to implement this function
+    if sector:
+        sector_etf = map_sector_to_etf(sector)  # You would need to implement this function
+        if sector_etf:
+            st.subheader(f"Sector Comparison: {ticker} vs {sector_etf} ({sector} ETF)")
+            plot_relative_performance(ticker, data_source, lookback_periods=[90, 180], benchmark=sector_etf)
+
+
+def backtest_strategy(ticker, data_source, lookback_days=365, suppress_output=False):
     val_accuracy = 0.0
     ml_used = False
     features=None
@@ -703,8 +1154,8 @@ def backtest_strategy(ticker, data_source, lookback_days=365):
         end_date = datetime.now()
         start_date = end_date - timedelta(days=lookback_days + 750)  # Extra 750 days for training
 
-        st.info(f"Fetching historical data for {ticker} from {start_date} to {end_date}...")
-
+        if not suppress_output:
+            st.info(f"Fetching historical data for {ticker} from {start_date} to {end_date}...")
         if data_source == 'yahoo':
             historical_data = yf.download(ticker, start=start_date, end=end_date, progress=False)
         else:
@@ -824,7 +1275,8 @@ def backtest_strategy(ticker, data_source, lookback_days=365):
 
             # Evaluate on validation set
             val_accuracy = pipeline.score(X_val, y_val)
-            st.info(f"ML model validation accuracy: {val_accuracy:.2f}")
+            if not suppress_output:
+                st.info(f"ML model validation accuracy: {val_accuracy:.2f}")
 
             # Generate predictions for the entire dataset
             ml_data['ML_Probability'] = pipeline.predict_proba(ml_data[features])[:, 1]
@@ -1576,10 +2028,7 @@ def main():
                                 "recommendation"] != "No Data":
                                 # Run a quick backtest to get ML accuracy
                                 try:
-                                    backtest_result = backtest_strategy(ticker, data_source,
-                                                                        lookback_days=180)  # Use shorter period for speed
-
-                                    # Get ML accuracy if available
+                                    backtest_result = backtest_strategy(ticker, data_source, lookback_days=180, suppress_output=True)  # Use shorter period for speed  # Get ML accuracy if available
                                     ml_accuracy = 0.0
                                     ml_used = False
                                     if backtest_result is not None and backtest_result[1] is not None:
