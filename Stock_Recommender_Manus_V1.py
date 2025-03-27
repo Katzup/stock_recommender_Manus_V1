@@ -1591,10 +1591,19 @@ def backtest_strategy(ticker, data_source, lookback_days=365, suppress_output=Fa
 
         return (backtest_results, metrics)
 
+
     except Exception as e:
-        traceback.print_exc()
-        st.error(f"Error in backtesting for {ticker}: {e}")
-        return (None, None)
+
+        # Log the full error
+
+        print(f"Error in backtest_strategy for {ticker}: {str(e)}")
+
+        if not suppress_output:
+            st.error(f"Error in backtest_strategy: {str(e)}")
+
+        # Return a valid, empty result
+
+        return None, {"ML_Validation_Accuracy": 0.0, "ML_Used": False}
 
 
 def show_backtest_results(ticker, data_source, lookback_days=365):
@@ -1982,7 +1991,13 @@ def get_recommendation_strength(score):
 
 # Main app UI
 def main():
-    st.title("Stock Analysis & Trading Strategy Backtester")
+    st.title("Stock & ETF Analysis & Trading Strategy Backtester")
+
+    # Initialize session state for storing analysis results
+    if 'summary_data' not in st.session_state:
+        st.session_state.summary_data = []
+    if 'analysis_complete' not in st.session_state:
+        st.session_state.analysis_complete = False
 
     # Sidebar setup
     st.sidebar.title("Settings")
@@ -2017,88 +2032,116 @@ def main():
             if len(tickers) > 1:
                 st.subheader("Multi-Stock Analysis Summary")
 
-                # Create a table to display all recommendations
-                summary_data = []
+                # Check if input tickers changed - if so, reset analysis state
+                if 'last_tickers' not in st.session_state or st.session_state.last_tickers != tickers:
+                    st.session_state.last_tickers = tickers
+                    st.session_state.analysis_complete = False
+                    st.session_state.summary_data = []
 
-                with st.spinner("Analyzing multiple stocks..."):
-                    for ticker in tickers:
-                        if ticker:  # Skip empty tickers
-                            recommendation = generate_recommendation(ticker, data_source)
-                            if recommendation["recommendation"] != "Error" and recommendation[
-                                "recommendation"] != "No Data":
-                                # Run a quick backtest to get ML accuracy
-                                try:
-                                    backtest_result = backtest_strategy(ticker, data_source, lookback_days=180, suppress_output=True)  # Use shorter period for speed  # Get ML accuracy if available
-                                    ml_accuracy = 0.0
-                                    ml_used = False
-                                    if backtest_result is not None and backtest_result[1] is not None:
-                                        metrics = backtest_result[1]
-                                        ml_accuracy = metrics.get('ML_Validation_Accuracy', 0.0)
-                                        ml_used = metrics.get('ML_Used', False)
-                                except Exception as e:
-                                    # Handle the error gracefully
-                                    st.warning(f"Error backtesting {ticker}: {str(e)}")
-                                    ml_accuracy = 0.0
-                                    ml_used = False
+                # Add this button for mobile-friendly operation
+                analyze_button = st.button("Analyze Selected Tickers")
 
-                                # Add to summary
-                                summary_data.append({
-                                    "Ticker": ticker,
-                                    "Price": f"${recommendation['price']:.2f}",
-                                    "Recommendation": recommendation["recommendation"],
-                                    "Score": f"{recommendation['score']:.1f}",
-                                    "Strength": get_recommendation_strength(recommendation["score"]),
-                                    "ML Accuracy": f"{ml_accuracy:.2f}" if ml_used else "N/A"
-                                })
+                # Set analysis_complete to True when button is clicked
+                if analyze_button:
+                    st.session_state.analysis_complete = True
+                    # Clear previous results
+                    st.session_state.summary_data = []
 
-                # Display the summary table
-                if summary_data:
-                    summary_df = pd.DataFrame(summary_data)
+                # Only run the analysis if the button is clicked or analysis was previously completed
+                if st.session_state.analysis_complete:
+                    # Use existing data if available, otherwise analyze stocks
+                    if not st.session_state.summary_data:
+                        with st.spinner("Analyzing multiple stocks..."):
+                            for ticker in tickers:
+                                if ticker:  # Skip empty tickers
+                                    recommendation = generate_recommendation(ticker, data_source)
+                                    if recommendation["recommendation"] != "Error" and recommendation[
+                                        "recommendation"] != "No Data":
+                                        # Run a quick backtest to get ML accuracy
+                                        try:
+                                            backtest_result = backtest_strategy(ticker, data_source, lookback_days=180,
+                                                                                suppress_output=True)
+                                            ml_accuracy = 0.0
+                                            ml_used = False
+                                            if backtest_result is not None and backtest_result[1] is not None:
+                                                metrics = backtest_result[1]
+                                                ml_accuracy = metrics.get('ML_Validation_Accuracy', 0.0)
+                                                ml_used = metrics.get('ML_Used', False)
+                                        except Exception as e:
+                                            # Enhanced error reporting
+                                            import traceback
+                                            error_details = traceback.format_exc()
+                                            st.warning(
+                                                f"Error backtesting {ticker}: {str(e) if str(e) else 'Unknown error'}")
+                                            ml_accuracy = 0.0
+                                            ml_used = False
 
-                    # Apply color formatting
-                    def color_recommendations(val):
-                        if "Strong Buy" in val:
-                            return 'background-color: #90EE90'  # Light green
-                        elif "Buy" in val:
-                            return 'background-color: #C1FFC1'  # Lighter green
-                        elif "Hold" in val:
-                            return 'background-color: #F0F0F0'  # Light gray
-                        elif "Sell" in val:
-                            return 'background-color: #FFB6C1'  # Light pink
-                        elif "Strong Sell" in val:
-                            return 'background-color: #FF6B6B'  # Darker pink
-                        return ''
+                                        # Add to summary
+                                        st.session_state.summary_data.append({
+                                            "Ticker": ticker,
+                                            "Price": f"${recommendation['price']:.2f}",
+                                            "Recommendation": recommendation["recommendation"],
+                                            "Score": f"{recommendation['score']:.1f}",
+                                            "Strength": get_recommendation_strength(recommendation["score"]),
+                                            "ML Accuracy": f"{ml_accuracy:.2f}" if ml_used else "N/A"
+                                        })
 
-                    def color_ml_accuracy(val):
-                        if val == "N/A":
-                            return 'background-color: #F0F0F0'  # Light gray
-                        try:
-                            acc = float(val)
-                            if acc >= 0.60:
-                                return 'background-color: #90EE90'  # Light green - excellent
-                            elif acc >= 0.55:
-                                return 'background-color: #C1FFC1'  # Lighter green - good
-                            elif acc >= 0.53:
-                                return 'background-color: #FFFACD'  # Light yellow - acceptable
-                            elif acc >= 0.50:
-                                return 'background-color: #FFB6C1'  # Light pink - poor
-                            else:
-                                return 'background-color: #FF6B6B'  # Darker pink - very poor
-                        except:
+                    # Display the summary table using data from session state
+                    if st.session_state.summary_data:
+                        summary_df = pd.DataFrame(st.session_state.summary_data)
+
+                        # Apply color formatting
+                        def color_recommendations(val):
+                            if "Strong Buy" in val:
+                                return 'background-color: #90EE90'  # Light green
+                            elif "Buy" in val:
+                                return 'background-color: #C1FFC1'  # Lighter green
+                            elif "Hold" in val:
+                                return 'background-color: #F0F0F0'  # Light gray
+                            elif "Sell" in val:
+                                return 'background-color: #FFB6C1'  # Light pink
+                            elif "Strong Sell" in val:
+                                return 'background-color: #FF6B6B'  # Darker pink
                             return ''
 
-                    # Apply styling to both recommendation and ML accuracy columns
-                    styled_df = summary_df.style.applymap(color_recommendations, subset=['Recommendation']) \
-                        .applymap(color_ml_accuracy, subset=['ML Accuracy'])
+                        def color_ml_accuracy(val):
+                            if val == "N/A":
+                                return 'background-color: #F0F0F0'  # Light gray
+                            try:
+                                acc = float(val)
+                                if acc >= 0.60:
+                                    return 'background-color: #90EE90'  # Light green - excellent
+                                elif acc >= 0.55:
+                                    return 'background-color: #C1FFC1'  # Lighter green - good
+                                elif acc >= 0.53:
+                                    return 'background-color: #FFFACD'  # Light yellow - acceptable
+                                elif acc >= 0.50:
+                                    return 'background-color: #FFB6C1'  # Light pink - poor
+                                else:
+                                    return 'background-color: #FF6B6B'  # Darker pink - very poor
+                            except:
+                                return ''
 
-                    st.dataframe(styled_df)
+                        # Apply styling to both recommendation and ML accuracy columns
+                        styled_df = summary_df.style.applymap(color_recommendations, subset=['Recommendation']) \
+                            .applymap(color_ml_accuracy, subset=['ML Accuracy'])
 
-                    # Allow user to select a ticker for detailed analysis
-                    selected_ticker = st.selectbox("Select a ticker for detailed analysis:", sorted(tickers))
-                    if selected_ticker:
-                        stock_analysis(selected_ticker, data_source)
+                        st.dataframe(styled_df)
+
+                        # Get available tickers from summary data
+                        available_tickers = [item["Ticker"] for item in st.session_state.summary_data]
+
+                        # Allow user to select a ticker for detailed analysis
+                        if available_tickers:
+                            selected_ticker = st.selectbox("Select a ticker for detailed analysis:",
+                                                           sorted(available_tickers))
+                            if selected_ticker:
+                                stock_analysis(selected_ticker, data_source)
+                    else:
+                        st.warning("No valid analysis results found for the tickers provided.")
                 else:
-                    st.warning("No valid analysis results found for the tickers provided.")
+                    # Display instructions when button is not clicked
+                    st.info("👆 Click the 'Analyze Selected Tickers' button above to run the analysis")
 
             # For single ticker, just show detailed analysis
             elif len(tickers) == 1:
@@ -2111,7 +2154,15 @@ def main():
         if ticker_input_mode == "Single Ticker" and tickers:
             show_backtest_results(tickers[0], data_source, lookback_days)
         elif ticker_input_mode == "Multiple Tickers" and tickers:
-            selected_ticker = st.selectbox("Select a ticker to backtest:", sorted(tickers))
+            # Use tickers from the analysis if available
+            if st.session_state.get('analysis_complete') and st.session_state.get('summary_data'):
+                available_tickers = [item["Ticker"] for item in st.session_state.summary_data]
+                selected_ticker = st.selectbox("Select a ticker to backtest:", sorted(available_tickers),
+                                               key="backtest_ticker_select")
+            else:
+                selected_ticker = st.selectbox("Select a ticker to backtest:", sorted(tickers),
+                                               key="backtest_ticker_select")
+
             if selected_ticker:
                 show_backtest_results(selected_ticker, data_source, lookback_days)
 
